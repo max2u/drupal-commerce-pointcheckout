@@ -1,0 +1,13 @@
+
+.pointcheckout_logo{
+	height:25px;
+	position: relative;
+    top: 10px;
+}
+
+.pointcheckout_link{
+    font-size: 10px;
+    position: relative;
+    top: 4px;
+    left: 4px;
+}
