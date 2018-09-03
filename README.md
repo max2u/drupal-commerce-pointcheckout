@@ -18,7 +18,7 @@ After that you go to store->configurations->payment methods
 in pointcheckout payment method area click on edit then on actions click on edit again to enter required settings 
 
 <b>mode</b> is to choose wether you want pointcheckout in live or test mode 
-<b>Api key and secret</b> will be provided to you on registration with pointcheckout
+<br/><b>Api key and secret</b> will be provided to you on registration with pointcheckout
 
 Save you settings.
 
