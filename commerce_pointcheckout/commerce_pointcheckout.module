@@ -1,0 +1,559 @@
+<?php
+
+/**
+ * @file
+ * Implements pointcheckout payment services for use with Drupal Commerce.
+ */
+
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_pointcheckout_menu() {
+
+  /// Always accessible, helps for testing while site is offline.
+  $items['commerce_pointcheckout/success'] = array(
+    'title' => 'PointCheckout verify',
+    'page callback' => 'commerce_pointcheckout_success',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+  $items['commerce_pointcheckout/cancel'] = array(
+    'title' => 'PointCheckout cancel',
+    'page callback' => 'commerce_pointcheckout_cancel',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+
+/**
+ * Loads the payment transaction matching the pointcheckout transaction ID.
+ *
+ * @param $txn_id
+ *   The pointcheckout transaction ID to search for in the remote_id field.
+ *
+ * @return
+ *   The loaded payment transaction.
+ */
+function commerce_pointcheckout_payment_transaction_load($txn_id) {
+  $transactions = commerce_payment_transaction_load_multiple(array(), array('remote_id' => $txn_id));
+  return $transactions ? reset($transactions) : FALSE;
+}
+
+
+
+/**
+ * Formats a price amount into a decimal value as expected by pointcheckout.
+ *
+ * @param $amount
+ *   An integer price amount.
+ * @param $currency_code
+ *   The currency code of the price.
+ *
+ * @return
+ *   The decimal price amount as expected by pointcheckout API servers.
+ */
+function commerce_pointcheckout_price_amount($amount, $currency_code) {
+  $rounded_amount = commerce_currency_round($amount, commerce_currency_load($currency_code));
+  return number_format(commerce_currency_amount_to_decimal($rounded_amount, $currency_code), 2, '.', '');
+}
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_pointcheckout_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['pointcheckout'] = array(
+    'base' => 'commerce_pointcheckout',
+    'title' => t('pointcheckout pay'),
+    'short_title' => t('pointcheckout'),
+    'description' => t('pointcheckout Website Payments Standard'),
+    'terminal' => FALSE,
+    'offsite' => TRUE,
+    'offsite_autoredirect' => TRUE,
+
+    // Because the order form generation code does not have access to a payment
+    // method info array, we set the bn directly there instead of making use of
+    // this buttonsource variable. It's here for consistency with other payment
+    // methods in this package.
+    'buttonsource' => 'CommerceGuys_Cart_PPS',
+  );
+
+  return $payment_methods;
+}
+
+
+/**
+ * Payment method callback: settings form.
+ */
+function commerce_pointcheckout_settings_form($settings = array()) {
+  $form = array();
+      $form['commerce_pointcheckout_env_mode'] = array(
+        '#type' => 'select',
+        '#title' => t('Mode'),
+        '#description' => t('choose the enviroment you want payments to be processed.'),
+        '#options' => getModeOptions(),
+        '#default_value' =>$settings['commerce_pointcheckout_env_mode'],
+      );
+      $form['commerce_pointcheckout_api_key'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Api Key'),
+        '#default_value' => $settings['commerce_pointcheckout_api_key'],
+      );
+       $form['commerce_pointcheckout_api_secret'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Api Secret'),
+        '#default_value' => $settings['commerce_pointcheckout_api_secret'],
+      );
+      return $form;
+}
+
+/**
+ * Payment method callback: adds a message to the submission form 
+ */
+function commerce_pointcheckout_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  $form = array();
+    $form['pointcheckout_information'] = array(
+      '#markup' => '<span class="commerce-pointcheckout-wps-info">' . t('(Continue with checkout to complete payment via pointcheckout.)') . '</span>',
+    );
+  return $form;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function commerce_pointcheckout_form_commerce_checkout_form_alter(&$form, &$form_state) {
+  // If this checkout form contains the payment method radios...
+  if (!empty($form['commerce_payment']['payment_method']['#options'])) {
+    // Loop over its options array looking for a pointcheckout pay option.
+    foreach ($form['commerce_payment']['payment_method']['#options'] as $key => &$value) {
+      list($method_id, $rule_name) = explode('|', $key);
+
+      // If we find pointcheckout pay...
+      if ($method_id == 'pointcheckout') {
+        // Prepare the replacement radio button text with icons.
+        $logo = '<img class="pointcheckout_logo" id="pointcheckout_logo" style="height:25px;" src="https://www.pointcheckout.com/image/logo.png" />';
+        $value =  $logo.'<a href="https://www.pointcheckout.com/info/what-is-pointcheckout" target="_blank" class ="pointcheckout_link">'.
+   'What is PointCheckout?</a>';
+        // Add the CSS.
+        $form['commerce_payment']['payment_method']['#attached']['css'][] = drupal_get_path('module', 'commerce_pointcheckout') . '/theme/commerce_pointcheckout.theme.css';
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Payment method callback: redirect form, a wrapper around the module's general
+ *   use function for building a WPS form.
+ */
+function commerce_pointcheckout_redirect_form($form, &$form_state, $order, $payment_method) {
+  // Return an error if the enabling action's settings haven't been configured.
+  if (empty($payment_method['settings']['commerce_pointcheckout_api_key'] || $payment_method['settings']['commerce_pointcheckout_api_secret'])) {
+    drupal_set_message(t('pointcheckout pay is not configured for use. No pointcheckout credentials has been specified.'), 'error');
+    return array();
+  }
+
+  $settings = array(
+    // Return to the previous page when payment is canceled
+    'cancel_return' => url('checkout/' . $order->order_id . '/payment/back/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+
+    // Return to the payment redirect page for processing successful payments
+    'return' => url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+
+    // Specify the current payment method instance ID in the notify_url
+    'payment_method' => $payment_method['instance_id'],
+
+    // Include the application indicator
+    'bn' => $payment_method['buttonsource'],
+  );
+
+  return commerce_pointcheckout_order_form($form, $form_state, $order, $payment_method['settings'] + $settings);
+}
+
+/***********************************************************************/
+/*****     PointCheckout Request Preparation                 ***********/
+/***********************************************************************/
+
+function commerce_pointcheckout_order_form($form, &$form_state, $order, $settings) {
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+  drupal_add_css(drupal_get_path('module', 'commerce_cart') . '/commerce_cart.css');
+  $items= _commerce_pointcheckout_product_details($wrapper->commerce_line_items);
+  //calculating totals
+  
+  $shipping = 0;
+  foreach ($wrapper->commerce_line_items as $delta => $line_item_wrapper) {
+    // If the current line item is a shipping line item, track its amount value
+    // without taxes separately from products.
+    if (module_exists('commerce_shipping') && $line_item_wrapper->type->value() == 'shipping') {
+      // Extract the unit price.
+      $shipping_price = $line_item_wrapper->commerce_unit_price->value();
+      $shipping += $shipping_price['amount'];
+    } 
+ 
+  $discount = 0;
+  if (module_exists('commerce_discount') && $line_item_wrapper->type->value() == 'discount') {
+      // Extract the unit price.
+      $discount_price = $line_item_wrapper->commerce_unit_price->value();
+      $discount += $discount_price['amount'];
+    } 
+  
+  $tax = 0;
+  if (module_exists('commerce_tax') && $line_item_wrapper->type->value() == 'tax') {
+      // Extract the unit price.
+      $tax_price = $line_item_wrapper->commerce_unit_price->value();
+      $tax += $tax_price['amount'];
+    } 
+    }
+  	$order_total = $wrapper->commerce_order_total->value();
+  	$grandtotal = number_format($order_total['amount']/100);
+  	$subtotal = $grandtotal - $tax - $shipping;
+	  $storeOrder = array();
+	  $storeOrder['referenceId'] = $order->order_id;
+	  $storeOrder['items'] = array_values($items);
+	  $storeOrder['subtotal'] = $subtotal;
+	  $storeOrder['shipping'] = $shipping;
+	  $storeOrder['tax'] = $tax;
+	  $storeOrder['discount'] =  $discount;
+	  $storeOrder['grandtotal'] = $grandtotal;
+	  $storeOrder['currency'] = $order_total['currency_code'];
+            //prepare customer Information
+            $customer = array();
+            $user = user_load($order->uid);
+            $customer['firstname'] = $user->name;
+            $customer['lastname'] = "";
+            $customer['email'] = $user->mail;
+            $customer['phone'] = "";
+            $shippingAddress = array();
+            $billingAddress = array();
+            // Prepare the billing address for use in the request.
+            $billing_address = $wrapper->commerce_customer_billing->commerce_customer_address->value();
+            if (empty($billing_address['first_name'])) {
+			    $name_parts = explode(' ', $billing_address['name_line']);
+			    $billing_address['first_name'] = array_shift($name_parts);
+			    $billing_address['last_name'] = implode(' ', $name_parts);
+            }
+            
+            // Add the billing address.
+		    $billingAddress['name']     = substr($billing_address['first_name'], 0, 45).' '.substr($billing_address['last_name'], 0, 45);
+		    $billingAddress['address1'] = substr($billing_address['thoroughfare'], 0, 150);
+		    $billingAddress['city']     = substr($billing_address['locality'], 0, 45);
+		    $billingAddress['state']    = substr($billing_address['administrative_area'], 0, 2);
+		    $billingAddress['country']  = substr($billing_address['country'], 0, 2);
+            // If the shipping module is enabled...
+            if (module_exists('commerce_shipping')) {
+            // If we have a shipping address, pass it to pointcheckout 
+              if (isset($order_wrapper->commerce_customer_shipping) && !empty($order_wrapper->commerce_customer_shipping->commerce_customer_address)) {
+                  $shipping_address = $order_wrapper->commerce_customer_shipping->commerce_customer_address->value();
+                 // Ensure there's a name_line.
+                  if (empty($shipping_address['name_line'])) {
+                      $shipping_address['name_line'] = $shipping_address['first_name'] . ' ' . $shipping_address['last_name'];
+                  }
+                 // Add the shipping address fields to the request.
+		         $shippingAddress['name']     =  substr($shipping_address['name_line'], 0, 32);
+		         $shippingAddress['address1'] = substr($shipping_address['thoroughfare'], 0, 100);
+		         $shippingAddress['address2'] = substr($shipping_address['premise'], 0, 100);
+		         $shippingAddress['city']     = substr($shipping_address['locality'], 0, 40);
+		         $shippingAddress['state']    = substr($shipping_address['administrative_area'], 0, 40);
+		         $shippingAddress['country']  = substr($shipping_address['country'], 0, 2);
+	          }
+	        }
+	        
+            $customer['billingAddress'] = $billingAddress;
+            $customer['shippingAddress'] = $shippingAddress;
+            $storeOrder['customer'] = $customer;
+            $storeOrder_json = json_encode($storeOrder);
+            $_BASE_URL= getPointCheckoutApiUrl($settings);
+            $headers = array(
+                'Content-Type: application/json',
+                'Api-Key:'.$settings['commerce_pointcheckout_api_key'],
+                'Api-Secret:'.$settings['commerce_pointcheckout_api_secret'],
+            );
+            $curl = curl_init($_BASE_URL);
+            curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
+            curl_setopt($curl, CURLOPT_POSTFIELDS, $storeOrder_json);
+            watchdog('commerce_pointcheckout','Request sent to PointCheckout : '.$storeOrder_json,array());
+            
+            
+            //sending request
+            $response = curl_exec($curl);
+            watchdog('commerce_pointcheckout','PointCheckout Response to order preparation : '.$response,array());        
+            //close connection
+            curl_close($curl);
+            
+            //alert error if response is failure
+            if (!$response) {
+                watchdog('commerce_pointcheckout', 'Error Connecting to PointCheckout - Please Try again later', WATCHDOG_ERROR);
+                $order = commerce_order_status_update($order, 'canceled');
+                drupal_set_message(t('something went wrong .. order canceled .'),'warning');
+                drupal_goto('cart');
+            }else{
+                $response_info = json_decode($response);
+                //prepare response to pointcheckout payment 
+                if (isset($response_info->success) && ($response_info->success == 'true')) {
+                    $message = '';
+                    if (isset($response_info->result)) {
+                        $resultData = $response_info->result;
+                        commerce_order_status_update($order,'pending');
+                    }else{
+                    watchdog('commerce_pointcheckout', 'Error Connecting to PointCheckout - Please Try again later', WATCHDOG_ERROR);
+                    $order = commerce_order_status_update($order, 'canceled');
+                    drupal_set_message(t('something went wrong .. order canceled .'),'warning');
+                    drupal_goto('cart');
+                   }
+                }else{
+                    watchdog('commerce_pointcheckout', 'Error Connecting to PointCheckout - Please Try again later error: @error', array('@error' => isset($response_info->error)?$response_info->error:'unknown error'), WATCHDOG_ERROR);
+                    $order = commerce_order_status_update($order, 'canceled');
+                    drupal_set_message(t('something went wrong .. order canceled .'),'warning');
+                    drupal_goto('cart');
+                }
+            }
+  $form['#action'] = getPointCheckoutCheckoutUrl($settings).$resultData->checkoutKey;
+  $form['#method'] ='get';
+  $form['actions'] = array('#type' => 'actions');
+  $form['actions']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Proceed to PointCheckout'),
+  );
+  return $form;
+}
+
+/**
+ * Returns an array of all possible language codes.
+ */
+function commerce_pointcheckout_languages() {
+  return array(
+    t('By country') => array(
+      'AU' => t('Australia'),
+      'AT' => t('Austria'),
+      'BE' => t('Belgium'),
+      'BR' => t('Brazil'),
+      'CA' => t('Canada'),
+      'CN' => t('China'),
+      'FR' => t('France'),
+      'DE' => t('Germany'),
+      'IT' => t('Italy'),
+      'NL' => t('Netherlands'),
+      'PL' => t('Poland'),
+      'PT' => t('Portugal'),
+      'RU' => t('Russia'),
+      'ES' => t('Spain'),
+      'CH' => t('Switzerland'),
+      'GB' => t('United Kingdom'),
+      'US' => t('United States'),
+    ),
+    t('By language') => array(
+      'da_DK' => t('Danish (for Denmark only)'),
+      'he_IL' => t('Hebrew (for all)'),
+      'id_ID' => t('Indonesian (for Indonesia only)'),
+      'jp_JP' => t('Japanese (for Japan only)'),
+      'no_NO' => t('Norwegian (for Norway only)'),
+      'pt_BR' => t('Brazilian Portuguese (for Portugal and Brazil only)'),
+      'ru_RU' => t('Russian (for Lithuania, Latvia, and Ukraine only)'),
+      'sv_SE' => t('Swedish (for Sweden only)'),
+      'th_TH' => t('Thai (for Thailand only)'),
+      'tr_TR' => t('Turkish (for Turkey only)'),
+      'zh_CN' => t('Simplified Chinese (for China only)'),
+      'zh_HK' => t('Traditional Chinese (for Hong Kong only)'),
+      'zh_TW' => t('Traditional Chinese (for Taiwan only)'),
+    ),
+  );
+}
+
+/***********************************************************************/
+/*****     PointCheckout Helper Methods                         ********/
+/***********************************************************************/
+
+/**
+ * Returns the pointcheckout modes.
+ */
+ function getModeOptions(){
+    $enableStaging = true;
+    if($enableStaging){
+       return array(
+          'staging' => t('Staging'),
+          'live' => t('Live'),
+          'test' => t('Test'));
+    }else{
+      return array(
+          'live' => t('Live'),
+          'test' => t('Test'));
+    }
+    
+ }
+/**
+ * Returns the pointcheckout api url.
+ */
+ function getPointCheckoutApiUrl($settings){
+    if ($settings['commerce_pointcheckout_env_mode'] == 'staging'){
+        return 'https://pay.staging.pointcheckout.com/api/v1.0/checkout';
+    }elseif($settings['commerce_pointcheckout_env_mode'] == 'live'){
+       return 'https://pay.pointcheckout.com/api/v1.0/checkout';
+    }else{
+       return 'https://pay.test.pointcheckout.com/api/v1.0/checkout';
+    }
+    } 
+
+/**
+ * Returns the pointcheckout checkout url.
+ */
+    function getPointCheckoutCheckoutUrl($settings){
+    if ($settings['commerce_pointcheckout_env_mode'] == 'staging'){
+        return 'https://pay.staging.pointcheckout.com/checkout/';
+    }elseif($settings['commerce_pointcheckout_env_mode'] == 'live'){
+        return 'https://pay.pointcheckout.com/checkout/';
+    }else{
+        return 'https://pay.test.pointcheckout.com/checkout/';
+    }
+}
+
+
+/**
+ * Returns the description and subtotal of the products on an order.
+ */
+function _commerce_pointcheckout_product_details($orderItems) {
+	  if (!empty($orderItems)) {
+	    $items = array();
+	    $i = 0;
+	    foreach ($orderItems as $delta => $line_item_wrapper) {
+	                $item = array(
+	                    'name'=> $line_item_wrapper->commerce_product->title->value(),
+	                    'sku' => $line_item_wrapper->line_item_label->value(),
+	                    'quantity' => number_format($line_item_wrapper->quantity->value()),
+	                    'total' => (number_format($line_item_wrapper->commerce_unit_price->amount->value() / 100, 2) )* (number_format($line_item_wrapper->quantity->value())),
+	                    );
+	                $items[$i++] = $item;
+	            }
+	  return $items ;
+	 }
+ }
+
+
+
+/**********************************************************************/
+/******     PointCheckout CallPack Methods                     ********/
+/**********************************************************************/
+
+/**
+ * Processes Instant Payment Notifiations from PointCheckout.
+ */
+function commerce_pointcheckout_success() {
+  if (!isset($_GET['reference'])) {
+    watchdog('commerce_pointcheckout', 'verify attempted with invalid order id.', array(), WATCHDOG_ERROR);
+    return;
+  }
+  if (!isset($_GET['checkout'])) {
+      watchdog('commerce_pointcheckout', 'verify attempted with invalid checkout id.', array(), WATCHDOG_ERROR);
+      return;
+  }
+  $order_id = intval($_GET['reference']);
+  watchdog('commerce_pointcheckout', 'Receiving verify at URL for order @order_id. <pre>@debug</pre>', array('@order_id' => $order_id));
+  $order = commerce_order_load($order_id);
+  $payment = commerce_payment_method_instance_load('pointcheckout|commerce_payment_pointcheckout');  
+  $setting = $payment['settings'];
+   if ($order == FALSE) {
+        watchdog('commerce_pointcheckout', 'verify attempted for non-existent order @order_id.', array('@order_id' => $order_id), WATCHDOG_ERROR);
+        return;
+   }
+
+   $checkoutId = check_plain($_GET['checkout']);
+   $_BASE_URL= getPointCheckoutApiUrl($setting);
+   $headers = array(
+       'Content-Type: application/json',
+       'Api-Key:'.$setting['commerce_pointcheckout_api_key'],
+       'Api-Secret:'.$setting['commerce_pointcheckout_api_secret'],
+   );
+   $ch = curl_init($_BASE_URL.'/'.$_GET['checkout']);
+   curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+   curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+   
+   $response = curl_exec($ch);
+   
+  // Log any errors to the watchdog.
+  if ($error = curl_error($ch)) {
+    watchdog('commerce_pointcheckout', 'payment verify failed with cURL error: @error', array('@error' => $error), WATCHDOG_ERROR);
+    return;
+  }
+
+  curl_close($ch);
+  $message = '';
+  $response_info = json_decode($response);
+  $payment_amount=$response_info->result->grandtotal;
+  $payment_currency =$response_info->result->currency;
+  
+  
+  //check response and redirect user to either success or failure page
+  if (($response_info->success == 'true' && $response_info->result->status =='PAID')) {
+      $message.= 'PointCheckout ' ;
+      $message.= 'payment status: '.$response_info->result->status;
+      $order = commerce_order_status_update($order,'processing');
+      drupal_set_message(t('Thank you for using pointcheckout your payment has been successfully processed'));
+      $_SESSION['commerce_checkout'][$order_id]['do_complete'] = TRUE;
+      drupal_goto('cart/checkout/complete');
+  }elseif(!$response_info->success == 'true'){
+      watchdog('commerce_pointcheckout','[ERROR} PointCheckout response with error payment failed   error msg is :'.$response_info->error);
+      $order = commerce_order_status_update($order,'canceled');
+      drupal_set_message(t('payment failed order canceled.'),'error');
+      drupal_goto('cart');
+  }else{
+      watchdog('commerce_pointcheckout','[ERROR} PointCheckout response that payment status you try to verify did not completed successfully' );
+      $order = commerce_order_status_update($order,'canceled');
+      drupal_set_message(t('payment failed order canceled.'),'error');
+      drupal_goto('cart');
+  }
+  
+}
+ 
+  
+/**
+ * Processes Instant Payment Notifiations from PointCheckout.
+ */
+function commerce_pointcheckout_cancel() {
+    if (!isset($_GET['reference'])) {
+        watchdog('commerce_pointcheckout', 'cancel attempted with invalid order id.', array(), WATCHDOG_ERROR);
+        return;
+    }
+    $order_id = intval($_GET['reference']);
+    $order = commerce_order_load($order_id);
+    if ($order == FALSE) {
+        watchdog('commerce_pointcheckout', 'cancel attempted for non-existent order @order_id.', array('@order_id' => $order_id), WATCHDOG_ERROR);
+        return;
+    }
+        //commerce_order_comment_save($order_id, 0, t('PointCheckout Payment Failed.'), 'admin');
+        $order = commerce_order_status_update($order,'canceled');
+        watchdog('commerce_pointcheckout','[INFO] PointCheckout response payment canceled by user request');
+        drupal_set_message(t('order canceled.'),'warning');
+        drupal_goto('cart');
+}
+/**********************************************************************/
+/*****     ADDING NEW ORDER STATUS --not working for now         ******/
+/**********************************************************************/
+/**
+ * Implement hook_commerce_order_state_info function
+ */
+/*function commerce_pointcheckout_commerce_order_state_info() {
+    $order_status = array();
+    $order_status ['pointcheckout'] = array(
+        'name' => 'pending_payment',
+        'title' => t('Pending Payment'),
+        'state' =>'Checkout',
+        'description' => t('Orders in this state is still waiting payment aproval.'),
+        'weight' => 1,
+    );
+    return $order_status;
+    }
+function commerce_pointcheckout_commerce_order_state_info() {
+    $order_status = array();
+    $order_status ['pointcheckout'] = array(
+        'name' => 'payment_received',
+        'title' => t('Payment Received'),
+        'state' => 'Checkout',
+        'description' => t('Orders in this state had payment approved .'),
+        'weight' => 2,
+    );
+    return $order_status;
+}*/
