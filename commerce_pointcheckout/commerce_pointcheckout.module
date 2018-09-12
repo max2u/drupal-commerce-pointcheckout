@@ -220,8 +220,8 @@ function commerce_pointcheckout_order_form($form, &$form_state, $order, $setting
 	  $storeOrder['discount'] =  $discount;
 	  $storeOrder['grandtotal'] = $grandtotal;
 	  global $base_url;
-	  $storeOrder['successUrl'] = $base_url.'commerce_pointcheckout/success';
-	  $storeOrder['failureUrl'] = $base_url.'commerce_pointcheckout/cancel';
+	  $storeOrder['successUrl'] = $base_url.'/commerce_pointcheckout/success';
+	  $storeOrder['failureUrl'] = $base_url.'/commerce_pointcheckout/cancel';
 	  $storeOrder['currency'] = $order_total['currency_code'];
             //prepare customer Information
             $customer = array();
