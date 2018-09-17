@@ -96,17 +96,17 @@ function commerce_pointcheckout_settings_form($settings = array()) {
         '#title' => t('Mode'),
         '#description' => t('choose the enviroment you want payments to be processed.'),
         '#options' => getModeOptions(),
-        '#default_value' =>$settings['commerce_pointcheckout_env_mode'],
+        '#default_value' =>isset($settings['commerce_pointcheckout_env_mode']) ? $settings['commerce_pointcheckout_env_mode'] : 'test',
       );
       $form['commerce_pointcheckout_api_key'] = array(
         '#type' => 'textfield',
         '#title' => t('Api Key'),
-        '#default_value' => $settings['commerce_pointcheckout_api_key'],
+        '#default_value' => isset($settings['commerce_pointcheckout_api_key']) ? $settings['commerce_pointcheckout_api_key'] : '',
       );
        $form['commerce_pointcheckout_api_secret'] = array(
         '#type' => 'textfield',
         '#title' => t('Api Secret'),
-        '#default_value' => $settings['commerce_pointcheckout_api_secret'],
+        '#default_value' => isset($settings['commerce_pointcheckout_api_secret']) ? $settings['commerce_pointcheckout_api_secret'] : '',
       );
       return $form;
 }
@@ -272,8 +272,8 @@ function commerce_pointcheckout_order_form($form, &$form_state, $order, $setting
             $_BASE_URL= getPointCheckoutApiUrl($settings);
             $headers = array(
                 'Content-Type: application/json',
-                'Api-Key:'.$settings['commerce_pointcheckout_api_key'],
-                'Api-Secret:'.$settings['commerce_pointcheckout_api_secret'],
+                'Api-Key:'.isset($settings['commerce_pointcheckout_api_key']) ? $settings['commerce_pointcheckout_api_key'] : '',
+                'Api-Secret:'.isset($settings['commerce_pointcheckout_api_secret']) ? $settings['commerce_pointcheckout_api_secret'] : '',
             );
             $curl = curl_init($_BASE_URL);
             curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
@@ -393,6 +393,7 @@ function commerce_pointcheckout_languages() {
  * Returns the pointcheckout api url.
  */
  function getPointCheckoutApiUrl($settings){
+    $settings['commerce_pointcheckout_env_mode'] => isset($settings['commerce_pointcheckout_env_mode']) ? $settings['commerce_pointcheckout_env_mode'] : 'test';
     if ($settings['commerce_pointcheckout_env_mode'] == 'staging'){
         return 'https://pay.staging.pointcheckout.com/api/v1.0/checkout';
     }elseif($settings['commerce_pointcheckout_env_mode'] == 'live'){
@@ -400,12 +401,13 @@ function commerce_pointcheckout_languages() {
     }else{
        return 'https://pay.test.pointcheckout.com/api/v1.0/checkout';
     }
-    } 
+  } 
 
 /**
  * Returns the pointcheckout checkout url.
  */
-    function getPointCheckoutCheckoutUrl($settings){
+  function getPointCheckoutCheckoutUrl($settings){
+      $settings['commerce_pointcheckout_env_mode'] => isset($settings['commerce_pointcheckout_env_mode']) ? $settings['commerce_pointcheckout_env_mode'] : 'test';
     if ($settings['commerce_pointcheckout_env_mode'] == 'staging'){
         return 'https://pay.staging.pointcheckout.com/checkout/';
     }elseif($settings['commerce_pointcheckout_env_mode'] == 'live'){
@@ -413,13 +415,13 @@ function commerce_pointcheckout_languages() {
     }else{
         return 'https://pay.test.pointcheckout.com/checkout/';
     }
-}
+  }
 
 
 /**
  * Returns the description and subtotal of the products on an order.
  */
-function _commerce_pointcheckout_product_details($orderItems) {
+  function _commerce_pointcheckout_product_details($orderItems) {
 	  if (!empty($orderItems)) {
 	    $items = array();
 	    $i = 0;
@@ -468,8 +470,8 @@ function commerce_pointcheckout_success() {
    $_BASE_URL= getPointCheckoutApiUrl($settings);
    $headers = array(
        'Content-Type: application/json',
-       'Api-Key:'.$settings['commerce_pointcheckout_api_key'],
-       'Api-Secret:'.$settings['commerce_pointcheckout_api_secret'],
+       'Api-Key:'. isset($settings['commerce_pointcheckout_api_key']) ? $settings['commerce_pointcheckout_api_key'] : '',
+       'Api-Secret:'.isset($settings['commerce_pointcheckout_api_secret']) ? $settings['commerce_pointcheckout_api_secret'] : '',
    );
    $ch = curl_init($_BASE_URL.'/'.$_GET['checkout']);
    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
@@ -545,6 +547,7 @@ function commerce_pointcheckout_cancel() {
     
     
    function getAdminUrl($settings){
+        $settings['commerce_pointcheckout_env_mode'] => isset($settings['commerce_pointcheckout_env_mode']) ? $settings['commerce_pointcheckout_env_mode'] : 'test';
         if ($settings['commerce_pointcheckout_env_mode'] == 'staging'){
             $_ADMIN_URL='https://admin.staging.pointcheckout.com';
         }elseif($settings['commerce_pointcheckout_env_mode'] == 'live'){
