@@ -292,7 +292,7 @@ function commerce_pointcheckout_order_form($form, &$form_state, $order, $setting
             if (!$response) {
                 watchdog('commerce_pointcheckout', 'Error Connecting to PointCheckout - Please Try again later', WATCHDOG_ERROR);
                 $order = commerce_order_status_update($order, 'canceled');
-                drupal_set_message(t('something went wrong .. order canceled .'),'warning');
+                drupal_set_message(t('unable to connect to PointCheckout servers, please try again in a moment.'),'warning');
                 drupal_goto('cart');
             }else{
                 $response_info = json_decode($response);
@@ -304,15 +304,15 @@ function commerce_pointcheckout_order_form($form, &$form_state, $order, $setting
                         $message = getPointCheckoutOrderHistoryMessage($resultData->checkoutId,0,$resultData->status,$resultData->currency, $settings);
                         $order = commerce_order_status_update($order,'pending', FALSE, NULL,$message);
                     }else{
-                    watchdog('commerce_pointcheckout', 'Error Connecting to PointCheckout - Please Try again later', WATCHDOG_ERROR);
-                    $order = commerce_order_status_update($order, 'canceled',FALSE,NULL,t('Error Connecting to PointCheckout -- payment failed'));
-                    drupal_set_message(t('something went wrong .. order canceled .'),'warning');
-                    drupal_goto('cart');
+                      watchdog('commerce_pointcheckout', 'Invalid PointCheckout Response : @error', array('@error' => isset($response_info->error)?$response_info->error:'unknown error'), WATCHDOG_ERROR);
+                      $order = commerce_order_status_update($order, 'canceled',FALSE,NULL,t('Error Connecting to PointCheckout -- payment failed'));
+                      drupal_set_message(t('something went wrong, please try again later.'),'warning');
+                      drupal_goto('cart');
                    }
                 }else if(isset($response_info->success)){
-                    watchdog('commerce_pointcheckout', 'Error Connecting to PointCheckout - Please Try again later error: @error', array('@error' => isset($response_info->error)?$response_info->error:'unknown error'), WATCHDOG_ERROR);
+                    watchdog('commerce_pointcheckout', 'PointCheckout payment error : @error', array('@error' => isset($response_info->error)?$response_info->error:'unknown error'), WATCHDOG_ERROR);
                     $order = commerce_order_status_update($order, 'canceled',FALSE,NULL,t('ERROR- payment failed with message :'.$response_info->error));
-                    drupal_set_message(t('something went wrong .. order canceled .'),'warning');
+                    drupal_set_message(t('order rejected by PointCheckout, please consult the site admin.'),'warning');
                     drupal_goto('cart');
                 }
             }
@@ -427,7 +427,7 @@ function commerce_pointcheckout_languages() {
 	    $i = 0;
 	    foreach ($orderItems as $delta => $line_item_wrapper) {
 	                $item = array(
-	                    'name'=> $line_item_wrapper->commerce_product->title->value(),
+	                    'name'=> isset($line_item_wrapper->commerce_product) ? $line_item_wrapper->commerce_product->title->value() : $line_item_wrapper->line_item_label->value(),
 	                    'sku' => $line_item_wrapper->line_item_label->value(),
 	                    'quantity' => number_format($line_item_wrapper->quantity->value()),
 	                    'total' => (number_format($line_item_wrapper->commerce_unit_price->amount->value() / 100, 2) )* (number_format($line_item_wrapper->quantity->value())),
