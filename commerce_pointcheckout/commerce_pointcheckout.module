@@ -152,7 +152,7 @@ function commerce_pointcheckout_form_commerce_checkout_form_alter(&$form, &$form
  */
 function commerce_pointcheckout_redirect_form($form, &$form_state, $order, $payment_method) {
   // Return an error if the enabling action's settings haven't been configured.
-  if (empty($payment_method['settings']['commerce_pointcheckout_api_key'] || $payment_method['settings']['commerce_pointcheckout_api_secret'])) {
+  if (empty($payment_method['settings']['commerce_pointcheckout_api_key']) || empty($payment_method['settings']['commerce_pointcheckout_api_secret'])) {
     drupal_set_message(t('pointcheckout pay is not configured for use. No pointcheckout credentials has been specified.'), 'error');
     return array();
   }
