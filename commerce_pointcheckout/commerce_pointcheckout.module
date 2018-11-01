@@ -92,6 +92,35 @@ function commerce_pointcheckout_settings_form($settings = array()) {
         '#title' => t('Api Secret'),
         '#default_value' =>(!empty($settings['commerce_pointcheckout_api_secret']) ? $settings['commerce_pointcheckout_api_secret'] : ''),
       );
+
+      $status_options = array();
+      foreach (commerce_order_statuses() as $status) {
+        $status_options[$status['name']] = $status['title'];
+      }
+
+      $form['commerce_pointcheckout_payment_pending'] = array(
+          '#type' => 'select',
+          '#title' => t('Pending order status'),
+          '#default_value' => (!empty($settings['commerce_pointcheckout_payment_pending']) ? $settings['commerce_pointcheckout_payment_pending'] : 'pending'),
+          '#options' => $status_options,
+          '#description' => t('Specify the order status when the customer is redirected to PointCheckout.'),
+      );
+
+      $form['commerce_pointcheckout_payment_complete'] = array(
+          '#type' => 'select',
+          '#title' => t('Paid order status'),
+          '#default_value' => (!empty($settings['commerce_pointcheckout_payment_complete']) ? $settings['commerce_pointcheckout_payment_complete'] : 'processing'),
+          '#options' => $status_options,
+          '#description' => t('Specify the order status when the customer completes the payment for the order from PointCheckout.'),
+      );
+
+      $form['commerce_pointcheckout_payment_canceled'] = array(
+          '#type' => 'select',
+          '#title' => t('Canceled order status'),
+          '#default_value' => (!empty($settings['commerce_pointcheckout_payment_canceled']) ? $settings['commerce_pointcheckout_payment_canceled'] : 'canceled'),
+          '#options' => $status_options,
+          '#description' => t('Specify the order status when the customer cancel the payment from PointCheckout.'),
+      );
       return $form;
 }
 
@@ -121,7 +150,7 @@ function commerce_pointcheckout_form_commerce_checkout_form_alter(&$form, &$form
         // Prepare the replacement radio button text with icons.
         $logo = '<img class="pointcheckout_logo" id="pointcheckout_logo" style="height:25px;" src="https://www.pointcheckout.com/image/logo.png" />';
         $value =  $logo.'<a href="https://www.pointcheckout.com/info/what-is-pointcheckout" target="_blank" class ="pointcheckout_link">'.
-   'What is PointCheckout?</a>';
+   'What is this?</a>';
         // Add the CSS.
         $form['commerce_payment']['payment_method']['#attached']['css'][] = drupal_get_path('module', 'commerce_pointcheckout') . '/theme/commerce_pointcheckout.theme.css';
         break;
@@ -276,7 +305,7 @@ function commerce_pointcheckout_order_form($form, &$form_state, $order, $setting
   //alert error if response is failure
   if (!$response) {
       watchdog('commerce_pointcheckout', 'Error Connecting to PointCheckout - Please Try again later', WATCHDOG_ERROR);
-      $order = commerce_order_status_update($order, 'canceled');
+      $order = commerce_order_status_update($order, (!empty($settings['commerce_pointcheckout_payment_canceled']) ? $settings['commerce_pointcheckout_payment_canceled'] : 'canceled'));
       drupal_set_message(t('unable to connect to PointCheckout servers, please try again in a moment.'),'warning');
       drupal_goto('<front>');
   }else{
@@ -287,16 +316,16 @@ function commerce_pointcheckout_order_form($form, &$form_state, $order, $setting
           if (isset($response_info->result)) {
               $resultData = $response_info->result;
               $message = getPointCheckoutOrderHistoryMessage($resultData->checkoutId,0,$resultData->status,$resultData->currency, $settings);
-              $order = commerce_order_status_update($order,'pending', FALSE, NULL,$message);
+              $order = commerce_order_status_update($order, (!empty($settings['commerce_pointcheckout_payment_pending']) ? $settings['commerce_pointcheckout_payment_pending'] : 'pending'), FALSE, NULL,$message);
           }else{
             watchdog('commerce_pointcheckout', 'Invalid PointCheckout Response : @error', array('@error' => isset($response_info->error)?$response_info->error:'unknown error'), WATCHDOG_ERROR);
-            $order = commerce_order_status_update($order, 'canceled',FALSE,NULL,t('Error Connecting to PointCheckout -- payment failed'));
+            $order = commerce_order_status_update($order, (!empty($settings['commerce_pointcheckout_payment_canceled']) ? $settings['commerce_pointcheckout_payment_canceled'] : 'canceled'),FALSE,NULL,t('Error Connecting to PointCheckout -- payment failed'));
             drupal_set_message(t('something went wrong, please try again later.'),'warning');
             drupal_goto('<front>');
           }
       }else if(isset($response_info->success)){
           watchdog('commerce_pointcheckout', 'PointCheckout payment error : @error', array('@error' => isset($response_info->error)?$response_info->error:'unknown error'), WATCHDOG_ERROR);
-          $order = commerce_order_status_update($order, 'canceled',FALSE,NULL,t('ERROR- payment failed with message :'.$response_info->error));
+          $order = commerce_order_status_update($order, (!empty($settings['commerce_pointcheckout_payment_canceled']) ? $settings['commerce_pointcheckout_payment_canceled'] : 'canceled'),FALSE,NULL,t('ERROR- payment failed with message :'.$response_info->error));
           drupal_set_message(t('order rejected by PointCheckout, please consult the site admin.'),'warning');
           drupal_goto('<front>');
       }
@@ -361,7 +390,7 @@ function commerce_pointcheckout_languages() {
  * Returns the pointcheckout modes.
  */
  function getModeOptions(){
-    $enableStaging = false;
+    $enableStaging = true;
     if($enableStaging){
        return array(
           'staging' => t('Staging'),
@@ -486,18 +515,18 @@ function commerce_pointcheckout_success() {
   if (($response_info->success == 'true' && $response_info->result->status =='PAID')) {
       $message.= 'PointCheckout ' ;
       $message.= 'payment status: '.$response_info->result->status;
-      $order = commerce_order_status_update($order,'processing',FALSE,NULL,getPointCheckoutOrderHistoryMessage($response_info->result->checkoutId,$response_info->result->cod,$response_info->result->status,$payment_currency,$settings));
+      $order = commerce_order_status_update($order,(!empty($settings['commerce_pointcheckout_payment_complete']) ? $settings['commerce_pointcheckout_payment_complete'] : 'processing'),FALSE,NULL,getPointCheckoutOrderHistoryMessage($response_info->result->checkoutId,$response_info->result->cod,$response_info->result->status,$payment_currency,$settings));
       drupal_set_message(t('Thank you for using pointcheckout your payment has been successfully processed'));
       $_SESSION['commerce_checkout'][$order_id]['do_complete'] = TRUE;
       drupal_goto('cart/checkout/complete');
   }elseif(!$response_info->success == 'true'){
       watchdog('commerce_pointcheckout','[ERROR} PointCheckout response with error payment failed   error msg is :'.$response_info->error);
-      $order = commerce_order_status_update($order,'canceled',FALSE,NULL,t('payment failed error :'.$response_info->error));
+      $order = commerce_order_status_update($order,(!empty($settings['commerce_pointcheckout_payment_canceled']) ? $settings['commerce_pointcheckout_payment_canceled'] : 'canceled'),FALSE,NULL,t('payment failed error :'.$response_info->error));
       drupal_set_message(t('payment failed order canceled.'),'error');
       drupal_goto('<front>');
   }else{
       watchdog('commerce_pointcheckout','[ERROR} PointCheckout response that payment status you try to verify did not completed successfully' );
-      $order = commerce_order_status_update($order,'canceled',FALSE,NULL,getPointCheckoutOrderHistoryMessage($response_info->result->checkoutId,0,$response_info->result->status,$payment_currency,$settings));
+      $order = commerce_order_status_update($order, (!empty($settings['commerce_pointcheckout_payment_canceled']) ? $settings['commerce_pointcheckout_payment_canceled'] : 'canceled'),FALSE,NULL,getPointCheckoutOrderHistoryMessage($response_info->result->checkoutId,0,$response_info->result->status,$payment_currency,$settings));
       drupal_set_message(t('payment failed order canceled.'),'error');
       drupal_goto('<front>');
   }
@@ -519,8 +548,11 @@ function commerce_pointcheckout_cancel() {
         watchdog('commerce_pointcheckout', 'cancel attempted for non-existent order @order_id.', array('@order_id' => $order_id), WATCHDOG_ERROR);
         return;
     }
+    $payment = commerce_payment_method_instance_load('pointcheckout|commerce_payment_pointcheckout');  
+    $settings = $payment['settings'];
+
         //commerce_order_comment_save($order_id, 0, t('PointCheckout Payment Failed.'), 'admin');
-        $order = commerce_order_status_update($order,'canceled', FALSE, NULL,t('user had cancelled the payment'));
+        $order = commerce_order_status_update($order, (!empty($settings['commerce_pointcheckout_payment_canceled']) ? $settings['commerce_pointcheckout_payment_canceled'] : 'canceled'), FALSE, NULL,t('user had canceled the payment'));
         watchdog('commerce_pointcheckout','[INFO] PointCheckout  payment canceled by user request');
         drupal_set_message(t('order canceled.'),'warning');
         drupal_goto('<front>');
